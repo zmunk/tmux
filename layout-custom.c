@@ -688,7 +688,8 @@ layout_parse(struct window *w, const char *input, char **cause)
 	/* Resize window to the layout size. */
 	if (layout_cell_is_tiled(lc) ||
 	    layout_cell_has_tiled_child(lc))
-		window_resize(w, lc->g.sx, lc->g.sy, -1, -1);
+		window_resize(w, lc->g.sx + 2 * layout_border_size(w),
+		    lc->g.sy + 2 * layout_border_size(w), -1, -1);
 
 	/* Preserve floating panes for version 1. */
 	if (pctx.version == 1) {
@@ -704,6 +705,7 @@ layout_parse(struct window *w, const char *input, char **cause)
 	/* Destroy the old layout and swap to the new. */
 	layout_free_cell(w->layout_root, 0);
 	w->layout_root = lc;
+	w->layout_border = layout_border_size(w);
 
 	/* Assign the panes into the cells. */
 	layout_assign(w, &pctx);

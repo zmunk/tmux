@@ -1466,6 +1466,7 @@ struct window {
 	int			 lastlayout;
 	struct layout_cell	*layout_root;
 	struct layout_cell	*saved_layout_root;
+	u_int			 layout_border; /* Reserved outer frame, in cells. */
 	char			*old_layout;
 
 	u_int			 sx;
@@ -3906,6 +3907,9 @@ int		 layout_cell_is_tiled(struct layout_cell *);
 int		 layout_cell_has_tiled_child(struct layout_cell *);
 int		 layout_add_horizontal_border(struct layout_cell *,
 		     struct layout_cell *, int);
+u_int		 layout_border_size(struct window *);
+u_int		 layout_width(struct window *);
+u_int		 layout_height(struct window *);
 void		 layout_fix_offsets(struct window *);
 void		 layout_fix_panes(struct window *, struct window_pane *);
 void		 layout_resize_adjust(struct window *, struct layout_cell *,

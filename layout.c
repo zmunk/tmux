@@ -331,6 +331,33 @@ layout_fix_offsets1(struct layout_cell *lc)
 	}
 }
 
+/* The layout tree describes the area inside the optional window frame. */
+u_int
+layout_border_size(struct window *w)
+{
+	if (!options_get_number(w->options, "pane-full-border") ||
+	    w->layout_root == NULL ||
+	    layout_count_cells(w->layout_root, 1) <= 1)
+		return (0);
+	return (1);
+}
+
+u_int
+layout_width(struct window *w)
+{
+	u_int border = 2 * w->layout_border;
+
+	return (w->sx > border ? w->sx - border : 1);
+}
+
+u_int
+layout_height(struct window *w)
+{
+	u_int border = 2 * w->layout_border;
+
+	return (w->sy > border ? w->sy - border : 1);
+}
+
 /* Update cell offsets based on their sizes. */
 void
 layout_fix_offsets(struct window *w)
@@ -341,8 +368,8 @@ layout_fix_offsets(struct window *w)
 	if (lc->flags & LAYOUT_CELL_FLOATING)
 		return;
 
-	lc->g.xoff = 0;
-	lc->g.yoff = 0;
+	lc->g.xoff = w->layout_border;
+	lc->g.yoff = w->layout_border;
 
 	layout_fix_offsets1(lc);
 }
@@ -415,15 +442,120 @@ layout_add_horizontal_border(struct layout_cell *root, struct layout_cell *lc,
 	return (0);
 }
 
+/* The outer frame can also carry the outermost pane status lines. */
+static int
+layout_status_extra(struct window *w, struct layout_cell *lc, int status)
+{
+	if (w->layout_border)
+		return (0);
+	return (layout_add_horizontal_border(w->layout_root, lc, status));
+}
+
+/* Minimum content plus decorations, before any tree arithmetic. */
+static u_int
+layout_leaf_minimum(struct window *w, struct layout_cell *lc,
+    enum layout_type type)
+{
+	struct window_pane *wp = lc->wp != NULL ? lc->wp : w->active;
+	u_int minimum = PANE_MINIMUM;
+	int width, pad;
+
+	if (type == LAYOUT_LEFTRIGHT) {
+		if (w->sb == PANE_SCROLLBARS_ALWAYS ||
+		    (wp != NULL && window_pane_scrollbar_reserve(wp))) {
+			width = wp->scrollbar_style.width;
+			pad = wp->scrollbar_style.pad;
+			minimum += (width > 0 ? width : 1) + (pad > 0 ? pad : 0);
+		}
+	} else if (layout_status_extra(w, lc, window_get_pane_status(w)))
+		minimum++;
+	return (minimum);
+}
+
+/*
+ * Presets and custom layouts may contain leaves smaller than their decorations.
+ * Grow the tree bottom-up, retaining its split topology and exact cell sums.
+ * As with upstream minimum layouts, a too-small window clips the result.
+ */
+static void
+layout_ensure_minimum(struct window *w, struct layout_cell *lc)
+{
+	struct layout_cell *child;
+	u_int sx = 0, sy = 0, count = 0, minimum;
+
+	if (!layout_cell_is_tiled(lc) && !layout_cell_has_tiled_child(lc))
+		return;
+	if (lc->type == LAYOUT_WINDOWPANE) {
+		minimum = layout_leaf_minimum(w, lc, LAYOUT_LEFTRIGHT);
+		if (lc->g.sx < minimum)
+			lc->g.sx = minimum;
+		minimum = layout_leaf_minimum(w, lc, LAYOUT_TOPBOTTOM);
+		if (lc->g.sy < minimum)
+			lc->g.sy = minimum;
+		return;
+	}
+	TAILQ_FOREACH(child, &lc->cells, entry) {
+		if (!layout_cell_is_tiled(child) &&
+		    !layout_cell_has_tiled_child(child))
+			continue;
+		layout_ensure_minimum(w, child);
+		if (lc->type == LAYOUT_LEFTRIGHT) {
+			sx += child->g.sx + 1;
+			if (sy < child->g.sy)
+				sy = child->g.sy;
+		} else {
+			sy += child->g.sy + 1;
+			if (sx < child->g.sx)
+				sx = child->g.sx;
+		}
+		count++;
+	}
+	if (count == 0)
+		return;
+	if (lc->type == LAYOUT_LEFTRIGHT)
+		sx--;
+	else
+		sy--;
+	lc->g.sx = sx;
+	lc->g.sy = sy;
+	TAILQ_FOREACH(child, &lc->cells, entry) {
+		if (!layout_cell_is_tiled(child) &&
+		    !layout_cell_has_tiled_child(child))
+			continue;
+		if (lc->type == LAYOUT_LEFTRIGHT && child->g.sy < sy)
+			layout_resize_adjust(w, child, LAYOUT_TOPBOTTOM,
+			    sy - child->g.sy);
+		if (lc->type == LAYOUT_TOPBOTTOM && child->g.sx < sx)
+			layout_resize_adjust(w, child, LAYOUT_LEFTRIGHT,
+			    sx - child->g.sx);
+	}
+}
+
 /* Update pane offsets and sizes based on their cells. */
 void
 layout_fix_panes(struct window *w, struct window_pane *skip)
 {
 	struct window_pane	*wp;
-	struct layout_cell	*lc, *root = w->layout_root;
+	struct layout_cell	*lc;
 	int			 status, sb_w, sb_pad;
 	int			 old_xoff, old_yoff, changed = 0;
 	u_int			 sx, sy, old_sx, old_sy;
+
+	/* Pane count and option changes use the normal tree resize path. */
+	if (w->layout_border != layout_border_size(w)) {
+		layout_resize(w, w->sx, w->sy);
+		return;
+	}
+	if (w->layout_border) {
+		sx = w->layout_root->g.sx;
+		sy = w->layout_root->g.sy;
+		layout_ensure_minimum(w, w->layout_root);
+		if (sx != w->layout_root->g.sx || sy != w->layout_root->g.sy) {
+			layout_resize(w, w->sx, w->sy);
+			return;
+		}
+		layout_fix_offsets(w);
+	}
 
 	TAILQ_FOREACH(wp, &w->panes, entry) {
 		if ((lc = wp->layout_cell) == NULL || wp == skip)
@@ -441,7 +573,7 @@ layout_fix_panes(struct window *w, struct window_pane *skip)
 
 		status = window_pane_get_pane_status(wp);
 		if (!window_pane_is_floating(wp) &&
-		    layout_add_horizontal_border(root, lc, status)) {
+		    layout_status_extra(w, lc, status)) {
 			if (status == PANE_STATUS_TOP)
 				wp->yoff++;
 			if (sy > 1)
@@ -513,7 +645,7 @@ static u_int
 layout_resize_check(struct window *w, struct layout_cell *lc,
     enum layout_type type)
 {
-	struct layout_cell	*lcchild, *root = w->layout_root;
+	struct layout_cell	*lcchild;
 	struct style		*sb_style = &w->active->scrollbar_style;
 	u_int			 available, minimum;
 	int			 status;
@@ -535,11 +667,13 @@ layout_resize_check(struct window *w, struct layout_cell *lc,
 				minimum = PANE_MINIMUM;
 		} else {
 			available = lc->g.sy;
-			if (layout_add_horizontal_border(root, lc, status))
+			if (layout_status_extra(w, lc, status))
 				minimum = PANE_MINIMUM + 1;
 			else
 				minimum = PANE_MINIMUM;
 		}
+		if (w->layout_border)
+			minimum = layout_leaf_minimum(w, lc, type);
 		if (available > minimum)
 			available -= minimum;
 		else
@@ -819,6 +953,14 @@ layout_resize(struct window *w, u_int sx, u_int sy)
 {
 	struct layout_cell	*lc = w->layout_root;
 	int			 xlimit, ylimit, xchange, ychange;
+	u_int			 wsx = sx, wsy = sy;
+
+	w->layout_border = layout_border_size(w);
+	if (w->layout_border) {
+		layout_ensure_minimum(w, lc);
+		sx = sx > 2 ? sx - 2 : 1;
+		sy = sy > 2 ? sy - 2 : 1;
+	}
 
 	/*
 	 * Adjust horizontally. Do not attempt to reduce the layout lower than
@@ -834,7 +976,7 @@ layout_resize(struct window *w, u_int sx, u_int sy)
 	 * window size.
 	 */
 	if (lc->type == LAYOUT_WINDOWPANE && (lc->flags & LAYOUT_CELL_FLOATING)) {
-		layout_clamp_floating_panes(w, sx, sy);
+		layout_clamp_floating_panes(w, wsx, wsy);
 		layout_fix_panes(w, NULL);
 		return;
 	}
@@ -867,7 +1009,7 @@ layout_resize(struct window *w, u_int sx, u_int sy)
 
 	/* Fix cell offsets. */
 	layout_fix_offsets(w);
-	layout_clamp_floating_panes(w, sx, sy);
+	layout_clamp_floating_panes(w, wsx, wsy);
 	layout_fix_panes(w, NULL);
 }
 
@@ -1162,8 +1304,11 @@ layout_set_size_check(struct window *w, struct layout_cell *lc,
 	u_int			 new_size, available, previous, count, idx;
 
 	/* Cells with no children must just be bigger than minimum. */
-	if (lc->type == LAYOUT_WINDOWPANE)
+	if (lc->type == LAYOUT_WINDOWPANE) {
+		if (w->layout_border)
+			return (size >= (int)layout_leaf_minimum(w, lc, type));
 		return (size >= PANE_MINIMUM);
+	}
 	available = size;
 
 	/* Count number of children. */
@@ -1300,7 +1445,7 @@ int
 layout_split_check_space(struct window_pane *wp, struct layout_cell *lc,
    enum layout_type type)
 {
-	struct layout_cell	*root = wp->window->layout_root;
+	struct window		*w = wp->window;
 	struct style		*sb_style = &wp->scrollbar_style;
 	u_int			 minimum, sx = lc->g.sx, sy = lc->g.sy;
 	int			 status;
@@ -1308,7 +1453,20 @@ layout_split_check_space(struct window_pane *wp, struct layout_cell *lc,
 	if (lc->flags & LAYOUT_CELL_FLOATING)
 		fatalx("floating cells cannot be split");
 
-	status = window_get_pane_status(wp->window);
+	status = window_get_pane_status(w);
+
+	/* The first split must leave room for the new outer frame too. */
+	if (options_get_number(w->options, "pane-full-border") &&
+	    !w->layout_border) {
+		if (sx < PANE_MINIMUM + 2 || sy < PANE_MINIMUM + 2)
+			return (0);
+		sx -= 2;
+		sy -= 2;
+	}
+	if (options_get_number(w->options, "pane-full-border") &&
+	    (sx < layout_leaf_minimum(w, lc, LAYOUT_LEFTRIGHT) ||
+	    sy < PANE_MINIMUM))
+		return (0);
 
 	switch (type) {
 	case LAYOUT_LEFTRIGHT:
@@ -1317,11 +1475,14 @@ layout_split_check_space(struct window_pane *wp, struct layout_cell *lc,
 			    sb_style->pad;
 		} else
 			minimum = PANE_MINIMUM * 2 + 1;
+		if (options_get_number(w->options, "pane-full-border"))
+			minimum = 2 * layout_leaf_minimum(w, lc, type) + 1;
 		if (sx < minimum)
 			return (0);
 		break;
 	case LAYOUT_TOPBOTTOM:
-		if (layout_add_horizontal_border(root, lc, status))
+		if (!options_get_number(w->options, "pane-full-border") &&
+		    layout_status_extra(w, lc, status))
 			minimum = PANE_MINIMUM * 2 + 2;
 		else
 			minimum = PANE_MINIMUM * 2 + 1;
@@ -1554,7 +1715,7 @@ layout_close_pane(struct window_pane *wp)
 int
 layout_spread_cell(struct window *w, struct layout_cell *parent)
 {
-	struct layout_cell	*lc, *root = w->layout_root;
+	struct layout_cell	*lc;
 	u_int			 number, each, size, this, remainder;
 	int			 change, changed, status;
 
@@ -1569,7 +1730,7 @@ layout_spread_cell(struct window *w, struct layout_cell *parent)
 	if (parent->type == LAYOUT_LEFTRIGHT)
 		size = parent->g.sx;
 	else if (parent->type == LAYOUT_TOPBOTTOM) {
-		if (layout_add_horizontal_border(root, parent, status))
+		if (layout_status_extra(w, parent, status))
 			size = parent->g.sy - 1;
 		else
 			size = parent->g.sy;
@@ -1600,7 +1761,7 @@ layout_spread_cell(struct window *w, struct layout_cell *parent)
 			}
 			layout_resize_adjust(w, lc, LAYOUT_LEFTRIGHT, change);
 		} else if (parent->type == LAYOUT_TOPBOTTOM) {
-			if (layout_add_horizontal_border(root, lc, status))
+			if (layout_status_extra(w, lc, status))
 				this = each + 1;
 			else
 				this = each;

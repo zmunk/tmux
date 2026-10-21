@@ -185,7 +185,9 @@ int
 window_make_pane_status(struct window_pane *wp, struct client *c, u_int width,
     struct redraw_span *span)
 {
-	struct grid_cell	 gc;
+	struct grid_cell	 gc, active_gc, cell;
+	struct window_pane	*active = wp->window->active;
+	struct layout_cell	*lc;
 	const char		*fmt;
 	struct format_tree	*ft;
 	struct style_line_entry	*sle = &wp->border_status_line;
@@ -194,7 +196,8 @@ window_make_pane_status(struct window_pane *wp, struct client *c, u_int width,
 	char			*expanded;
 	u_int			 i;
 	enum pane_lines		 pane_lines;
-	int			 pane_status, cell_type;
+	int			 pane_status, cell_type, x, y;
+	int			 left, right, top, bottom;
 
 	pane_status = window_pane_get_pane_status(wp);
 	if (pane_status == PANE_STATUS_OFF || width == 0)
@@ -226,6 +229,40 @@ window_make_pane_status(struct window_pane *wp, struct client *c, u_int width,
 
 	screen_write_stop(&ctx);
 	format_free(ft);
+
+	/*
+	 * A neighbour's status line can cross the active pane perimeter,
+	 * including T junctions. Its inherited border style must follow the
+	 * active border there. Keep glyphs and explicit format styling intact.
+	 * This modifies only tmux's status screen, never application cells.
+	 */
+	if (wp->window->layout_border && active != NULL &&
+	    (lc = active->layout_cell) != NULL) {
+		window_pane_get_border_style(active, c, &active_gc);
+		left = lc->g.xoff - 1;
+		right = lc->g.xoff + lc->g.sx;
+		top = lc->g.yoff - 1;
+		bottom = lc->g.yoff + lc->g.sy;
+		y = pane_status == PANE_STATUS_TOP ?
+		    wp->yoff - 1 : wp->yoff + (int)wp->sy;
+		for (i = 0; i < width; i++) {
+			x = wp->xoff + 2 + i;
+			if (!(((y == top || y == bottom) &&
+			    x >= left && x <= right) ||
+			    ((x == left || x == right) &&
+			    y >= top && y <= bottom)))
+				continue;
+			grid_view_get_cell(wp->status_screen.grid, i, 0, &cell);
+			if (cell.fg == gc.fg)
+				cell.fg = active_gc.fg;
+			if (cell.bg == gc.bg)
+				cell.bg = active_gc.bg;
+			if ((cell.attr & ~GRID_ATTR_CHARSET) == gc.attr)
+				cell.attr = (cell.attr & GRID_ATTR_CHARSET) |
+				    active_gc.attr;
+			grid_view_set_cell(wp->status_screen.grid, i, 0, &cell);
+		}
+	}
 
 	free(sle->expanded);
 	sle->expanded = expanded;

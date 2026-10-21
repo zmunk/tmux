@@ -1691,6 +1691,13 @@ const struct options_table_entry options_table[] = {
 	  .text = "Style of the active pane border."
 	},
 
+	{ .name = "pane-full-border",
+	  .type = OPTIONS_TABLE_FLAG,
+	  .scope = OPTIONS_TABLE_WINDOW,
+	  .default_num = 0,
+	  .text = "Reserve an outer frame for complete pane borders."
+	},
+
 	{ .name = "pane-base-index",
 	  .type = OPTIONS_TABLE_NUMBER,
 	  .scope = OPTIONS_TABLE_WINDOW,

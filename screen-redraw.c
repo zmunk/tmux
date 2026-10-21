@@ -744,10 +744,13 @@ redraw_mark_pane_borders(struct redraw_build_ctx *bctx, struct window_pane *wp,
 	} else {
 		mark_right = (right <= (int)bctx->w->sx);
 		mark_bottom = (bottom <= (int)bctx->w->sy);
-		if (pane_status == PANE_STATUS_TOP && bottom < (int)bctx->w->sy)
-			mark_bottom = 0;
-		else if (pane_status == PANE_STATUS_BOTTOM)
-			mark_top = 0;
+		if (!bctx->w->layout_border) {
+			if (pane_status == PANE_STATUS_TOP &&
+			    bottom < (int)bctx->w->sy)
+				mark_bottom = 0;
+			else if (pane_status == PANE_STATUS_BOTTOM)
+				mark_top = 0;
+		}
 	}
 
 	if (mark_top) {
@@ -1353,6 +1356,10 @@ redraw_get_pane_for_border_style(struct redraw_draw_ctx *dctx,
 	if (span->data.type != REDRAW_SPAN_BORDER)
 		return (NULL);
 
+	/* Full borders must not use the two-pane half-colour indicator. */
+	if (dctx->scene->w->layout_border && active != NULL &&
+	    redraw_data_has_pane(&span->data, active))
+		return (active);
 	if (span->data.b.style_wp != NULL)
 		return (span->data.b.style_wp);
 	if (active != NULL && redraw_data_has_pane(&span->data, active))

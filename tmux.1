@@ -6177,6 +6177,21 @@ see the
 section.
 Attributes are ignored.
 .Pp
+.It Ic pane\-full\-border Op Ic on | off
+Reserve a one-cell outer frame in windows containing multiple panes, allowing
+complete rectangular borders around panes.
+The default is off.
+Internal separators are shared, and the active pane uses
+.Ic pane\-active\-border\-style .
+Application cells are never overlaid or recoloured.
+Pane sizes decrease to accommodate the frame and applications receive normal
+terminal resize notifications.
+Changing the active pane does not resize panes.
+Pane status lines and reserved scrollbars share the existing border machinery.
+Single-pane and zoomed single-pane layouts have no added frame.
+Layouts retain their minimum content sizes; if the window is too small, the
+layout is clipped as with other minimum-size layouts.
+.Pp
 .It Ic pane\-base\-index Ar index
 Like
 .Ic base\-index ,
