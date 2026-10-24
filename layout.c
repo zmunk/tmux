@@ -331,13 +331,13 @@ layout_fix_offsets1(struct layout_cell *lc)
 	}
 }
 
-/* The layout tree describes the area inside the optional window frame. */
+/* Only tiled panes determine whether the layout needs an outer frame. */
 u_int
 layout_border_size(struct window *w)
 {
 	if (!options_get_number(w->options, "pane-full-border") ||
 	    w->layout_root == NULL ||
-	    layout_count_cells(w->layout_root, 1) <= 1)
+	    layout_count_cells(w->layout_root, 0) <= 1)
 		return (0);
 	return (1);
 }

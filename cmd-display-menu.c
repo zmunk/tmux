@@ -562,12 +562,13 @@ cmd_display_popup_exec(struct cmd *self, struct cmdq_item *item)
 		window_pop_zoom(w);
 		goto fail;
 	}
+	/* Restoring zoom may clamp floating panes: use the requested border. */
+	options_set_number(new_wp->options, "pane-border-lines", lines);
 	window_pop_zoom(w);
 	new_wp->flags |= PANE_CAPTUREALLKEYS;
 	if (!args_has(args, 'E'))
 		new_wp->flags |= PANE_CLOSEONCANCEL;
 
-	options_set_number(new_wp->options, "pane-border-lines", lines);
 	if (args_has(args, 'E') > 1) {
 		if (args_has(args, 'k'))
 			options_set_number(new_wp->options, "remain-on-exit", 4);
